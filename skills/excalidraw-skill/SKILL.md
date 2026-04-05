@@ -1,17 +1,19 @@
 ---
 name: excalidraw-skill
-description: Programmatic canvas toolkit for creating, editing, and refining Excalidraw diagrams via MCP tools with real-time canvas sync. Use when an agent needs to (1) draw or lay out diagrams on a live canvas, (2) iteratively refine diagrams using describe_scene and get_canvas_screenshot to see its own work, (3) export/import .excalidraw files or PNG/SVG images, (4) save/restore canvas snapshots, (5) convert Mermaid to Excalidraw, or (6) perform element-level CRUD, alignment, distribution, grouping, duplication, and locking. Requires a running canvas server (EXPRESS_SERVER_URL, default http://localhost:3000).
+description: Programmatic canvas toolkit for creating, editing, and refining Excalidraw diagrams via MCP tools with real-time canvas sync. Use when an agent needs to (1) draw or lay out diagrams on a live canvas, (2) iteratively refine diagrams using describe_scene and visual screenshot feedback to see its own work, (3) export/import .excalidraw files or PNG/SVG images, (4) save/restore canvas snapshots, (5) convert Mermaid to Excalidraw, or (6) perform element-level CRUD, alignment, distribution, grouping, duplication, and locking. Supports both canvas mode (EXPRESS_SERVER_URL) and file mode (STORAGE_MODE=file).
 ---
 
 # Excalidraw Skill
 
 ## Step 0: Determine Connection Mode
 
-Two modes are available. Try MCP first — it has more capabilities.
+Three modes are available. Try MCP first — it has more capabilities.
 
-**MCP mode** (preferred): If `excalidraw/batch_create_elements` and other `excalidraw/*` tools appear in your tool list, use them directly. MCP tools handle label and arrow binding format automatically.
+**MCP mode — canvas** (full features): If `excalidraw/batch_create_elements` and other `excalidraw/*` tools appear in your tool list and a canvas server is running, use them directly. Supports screenshots via `get_canvas_screenshot`.
 
-**REST API mode** (fallback): If MCP tools aren't available, use HTTP endpoints at `http://localhost:3000`. See the cheatsheet for REST payloads. Note the format differences in the table below — REST and MCP accept slightly different field names.
+**MCP mode — file** (no server needed): If the MCP server is running with `STORAGE_MODE=file`, all CRUD/layout tools work. Elements persist to `.excalidraw` files. Use `open_file` to switch between files. Screenshots are NOT available — use `describe_scene` for structural checks and `excalidraw-mc2/create_view` (if available) for visual preview in VS Code chat.
+
+**REST API mode** (fallback): If MCP tools aren't available, use HTTP endpoints at `http://localhost:3000`. See the cheatsheet for REST payloads.
 
 **Neither works?** Tell the user:
 > The Excalidraw canvas server is not running. To set up:
@@ -41,6 +43,7 @@ Two modes are available. Try MCP first — it has more capabilities.
 | Viewport | `set_viewport` | `POST /api/viewport` (needs browser) |
 | Export image | `export_to_image` | `POST /api/export/image` (needs browser) |
 | Export URL | `export_to_excalidraw_url` | Only via MCP |
+| Open/switch file | `open_file` | N/A (file mode only) |
 
 ### Format Differences Between Modes (Critical)
 
@@ -139,8 +142,10 @@ If you find any issue: **stop, fix it, re-screenshot, then continue.** Say "I se
 4. Use `batch_create_elements` — create shapes and arrows in one call. Custom `id` fields (e.g. `"id": "auth-svc"`) make later updates easy.
 5. Set shape widths using `max(160, labelLength * 9)`. Use `text` field for labels.
 6. Bind arrows with `startElementId` / `endElementId` — they auto-route to element edges.
-7. `set_viewport` with `scrollToContent: true` to auto-fit.
-8. `get_canvas_screenshot` → run Quality Checklist → fix issues before next iteration.
+7. **MANDATORY: Run the visual feedback loop** (see "Iterative Refinement" section):
+   - **Canvas mode**: `set_viewport` with `scrollToContent: true` → `get_canvas_screenshot` → analyze → fix issues → re-screenshot → repeat until clean.
+   - **File mode**: `describe_scene` → analyze positions/bindings → fix issues → `describe_scene` again → repeat. If user has VS Code Excalidraw extension open, ask for a screenshot or use `excalidraw-mc2/create_view` to render a preview.
+8. Only declare "done" after ALL quality checks pass.
 
 **MCP element + arrow example:**
 ```json
@@ -213,28 +218,76 @@ The intermediate waypoint `[50, -40]` lifts the arrow upward. `roundness: {type:
 
 ---
 
-## Workflow: Iterative Refinement
+## Workflow: Iterative Refinement (MANDATORY)
 
-Using `describe_scene` and `get_canvas_screenshot` together is what makes this skill powerful.
+**Every diagram MUST go through visual verification before being considered done.** Never create a diagram and stop — always verify and fix.
 
-- **`describe_scene`** → returns structured text: element IDs, types, positions, labels, connections. Use this when you need to know *what's on the canvas* before making programmatic updates (find IDs, understand bounding boxes).
-- **`get_canvas_screenshot`** → returns a PNG image of the actual rendered canvas. Use this for *visual quality verification* — it shows you exactly what the user sees, including truncation, overlap, and arrow routing.
+### The Feedback Loop
 
-**Feedback loop (MCP):**
+After creating or modifying elements, you MUST execute this loop until all checks pass:
+
 ```
-batch_create_elements
-  → get_canvas_screenshot → "text truncated on auth-svc"
-  → update_element (increase width) → get_canvas_screenshot → "overlap between auth-svc and rate-limiter"
-  → update_element (reposition) → get_canvas_screenshot → "all checks pass"
-  → proceed
+CREATE/UPDATE elements
+  → VERIFY (screenshot or describe_scene)
+  → ANALYZE (check all items below)
+  → FIX any issues found
+  → VERIFY again
+  → REPEAT until clean
+  → DONE
 ```
 
-**Feedback loop (REST):**
+**Maximum iterations: 5.** If still broken after 5 rounds, report remaining issues to the user.
+
+### How to Verify (by mode)
+
+| Mode | Primary Verification | Secondary Verification |
+|------|---------------------|----------------------|
+| Canvas mode | `get_canvas_screenshot` (visual) | `describe_scene` (structural) |
+| File mode + VS Code Excalidraw ext | Ask user for screenshot, or use `excalidraw-mc2/create_view` if available | `describe_scene` (structural) |
+| File mode (headless) | `describe_scene` (structural) + coordinate math | `query_elements` to spot-check |
+
+### What to Check (fix ALL before proceeding)
+
+1. **Missing labels** — Every shape should show its text. If labels are invisible, the file format may be wrong (check bound text elements have `containerId` matching the parent shape).
+2. **Text truncation** — All label text must be fully visible. Fix: increase shape `width`/`height`.
+3. **Overlapping elements** — No two shapes should share the same space. Check bounding boxes: `(x, y)` to `(x+width, y+height)` must not intersect. Fix: move elements apart.
+4. **Broken arrows** — Arrows should connect from edge of source to edge of target, not pass through boxes or end in empty space. Fix: verify `startBinding`/`endBinding` element IDs exist, recompute arrow `x`, `y`, `points`.
+5. **Arrow-label overlap** — Arrow labels sit at midpoint. If they overlap a shape, shorten label or adjust arrow path.
+6. **Cross-zone arrows** — Arrows should not cut through unrelated shapes. Fix: add waypoints to route around.
+7. **Spacing** — At least 40px gap between elements. Cramped = unreadable.
+8. **Font size** — Body text ≥ 16, titles ≥ 20. Never below 14.
+9. **Title visibility** — Title text must be within visible canvas area (y ≥ 0 typically).
+10. **Zone labels** — Never use `text`/`label` on large background rectangles. Use free-standing text at the top corner instead.
+
+### Example: Fix Loop in Action
+
 ```
-POST /api/elements/batch
-  → POST /api/export/image → save PNG → evaluate
-  → PUT /api/elements/:id (fix issues) → re-screenshot → evaluate
-  → proceed
+1. batch_create_elements (8 shapes + 5 arrows)
+2. describe_scene → "Arrow a3 points [[0,0],[100,0]] — stub, not reaching target"
+   → Fix: update_element a3 with correct points computed from element edges
+3. describe_scene → "Element 'cache' at (720,360) overlaps zone boundary at (700,80,400,420)"
+   → Fix: update_element cache to x=750
+4. get_canvas_screenshot → visually confirm all labels visible, arrows connect properly
+5. All checks pass → DONE
+```
+
+### Structural Verification via describe_scene (when screenshots unavailable)
+
+When you cannot take a screenshot, use `describe_scene` + `query_elements` and verify programmatically:
+
+```python
+# Pseudo-code for overlap detection
+for each pair of elements (a, b):
+  if a.x < b.x + b.width AND a.x + a.width > b.x AND
+     a.y < b.y + b.height AND a.y + a.height > b.y:
+    → OVERLAP: fix by moving one element
+
+# Pseudo-code for arrow validation
+for each arrow:
+  if startBinding.elementId not in element_ids:
+    → BROKEN: fix binding
+  if points == [[0,0],[100,0]]:  # default stub
+    → STUB: recompute from source/target edge positions
 ```
 
 ---
@@ -274,6 +327,7 @@ curl -X POST http://localhost:3000/api/elements/from-mermaid \
 - Import from `.excalidraw`: `import_scene` with `mode: "replace"` or `"merge"`
 - Export to image: `export_to_image` with `format: "png"` or `"svg"` (requires browser open)
 - Share link: `export_to_excalidraw_url` — encrypts scene, returns shareable excalidraw.com URL
+- Open/switch file (file mode): `open_file` with `filePath` to switch active `.excalidraw` file at runtime
 - CLI export: `node scripts/export-elements.cjs --out diagram.elements.json`
 - CLI import: `node scripts/import-elements.cjs --in diagram.elements.json --mode batch|sync`
 
