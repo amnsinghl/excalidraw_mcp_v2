@@ -28,6 +28,7 @@ import {
   validateElement,
   normalizeFontFamily
 } from './types.js';
+import { createStorageBackend, StorageBackend, CanvasStorageBackend } from './storage/index.js';
 import fetch from 'node-fetch';
 
 // Load environment variables
@@ -48,138 +49,35 @@ function sanitizeFilePath(filePath: string): string {
   return resolved;
 }
 
-// Express server configuration
+// Express server configuration (used for canvas-only operations)
 const EXPRESS_SERVER_URL = process.env.EXPRESS_SERVER_URL || 'http://localhost:3000';
-const ENABLE_CANVAS_SYNC = process.env.ENABLE_CANVAS_SYNC !== 'false'; // Default to true
 
-// API Response types
-interface ApiResponse {
+// Initialize storage backend based on STORAGE_MODE env var
+const storage: StorageBackend = createStorageBackend();
+
+// Helper: get canvas server URL (for canvas-only tools like export_to_image)
+function getCanvasServerUrl(): string {
+  if (storage.mode === 'canvas') {
+    return (storage as CanvasStorageBackend).getServerUrl();
+  }
+  return EXPRESS_SERVER_URL;
+}
+
+// Helper: assert canvas mode for browser-dependent tools
+function requireCanvasMode(toolName: string): void {
+  if (storage.mode !== 'canvas') {
+    throw new Error(
+      `Tool "${toolName}" requires canvas mode (needs a running canvas server with browser). ` +
+      `Current mode: ${storage.mode}. Set STORAGE_MODE=canvas and ensure the canvas server is running.`
+    );
+  }
+}
+
+// Response type for direct canvas HTTP calls (used by canvas-only tools)
+interface CanvasApiResponse {
   success: boolean;
-  element?: ServerElement;
-  elements?: ServerElement[];
-  message?: string;
   error?: string;
-  count?: number;
-}
-
-interface SyncResponse {
-  element?: ServerElement;
-  elements?: ServerElement[];
-}
-
-// Helper functions to sync with Express server (canvas)
-async function syncToCanvas(operation: string, data: any): Promise<SyncResponse | null> {
-  if (!ENABLE_CANVAS_SYNC) {
-    logger.debug('Canvas sync disabled, skipping');
-    return null;
-  }
-
-  try {
-    let url: string;
-    let options: any;
-    
-    switch (operation) {
-      case 'create':
-        url = `${EXPRESS_SERVER_URL}/api/elements`;
-        options = {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        };
-        break;
-        
-      case 'update':
-        url = `${EXPRESS_SERVER_URL}/api/elements/${data.id}`;
-        options = {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        };
-        break;
-        
-      case 'delete':
-        url = `${EXPRESS_SERVER_URL}/api/elements/${data.id}`;
-        options = { method: 'DELETE' };
-        break;
-        
-      case 'batch_create':
-        url = `${EXPRESS_SERVER_URL}/api/elements/batch`;
-        options = {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ elements: data })
-        };
-        break;
-        
-      default:
-        logger.warn(`Unknown sync operation: ${operation}`);
-        return null;
-    }
-
-    logger.debug(`Syncing to canvas: ${operation}`, { url, data });
-    const response = await fetch(url, options);
-
-    // Parse JSON response regardless of HTTP status
-    const result = await response.json() as ApiResponse;
-
-    if (!response.ok) {
-      logger.warn(`Canvas sync returned error status: ${response.status}`, result);
-      throw new Error(result.error || `Canvas sync failed: ${response.status} ${response.statusText}`);
-    }
-
-    logger.debug(`Canvas sync successful: ${operation}`, result);
-    return result as SyncResponse;
-    
-  } catch (error) {
-    logger.warn(`Canvas sync failed for ${operation}:`, (error as Error).message);
-    // Don't throw - we want MCP operations to work even if canvas is unavailable
-    return null;
-  }
-}
-
-// Helper to sync element creation to canvas
-async function createElementOnCanvas(elementData: ServerElement): Promise<ServerElement | null> {
-  const result = await syncToCanvas('create', elementData);
-  return result?.element || elementData;
-}
-
-// Helper to sync element update to canvas  
-async function updateElementOnCanvas(elementData: Partial<ServerElement> & { id: string }): Promise<ServerElement | null> {
-  const result = await syncToCanvas('update', elementData);
-  return result?.element || null;
-}
-
-// Helper to sync element deletion to canvas
-async function deleteElementOnCanvas(elementId: string): Promise<any> {
-  const result = await syncToCanvas('delete', { id: elementId });
-  return result;
-}
-
-// Helper to sync batch creation to canvas
-async function batchCreateElementsOnCanvas(elementsData: ServerElement[]): Promise<ServerElement[] | null> {
-  const result = await syncToCanvas('batch_create', elementsData);
-  return result?.elements || elementsData;
-}
-
-// Helper to fetch element from canvas
-async function getElementFromCanvas(elementId: string): Promise<ServerElement | null> {
-  if (!ENABLE_CANVAS_SYNC) {
-    logger.debug('Canvas sync disabled, skipping fetch');
-    return null;
-  }
-
-  try {
-    const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/${elementId}`);
-    if (!response.ok) {
-      logger.warn(`Failed to fetch element ${elementId}: ${response.status}`);
-      return null;
-    }
-    const data = await response.json() as { element?: ServerElement };
-    return data.element || null;
-  } catch (error) {
-    logger.error('Error fetching element from canvas:', error);
-    return null;
-  }
+  [key: string]: any;
 }
 
 // In-memory storage for scene state
@@ -895,23 +793,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         // Convert text to label format for Excalidraw
         const excalidrawElement = convertTextToLabel(element);
 
-        // Create element directly on HTTP server (no local storage)
-        const canvasElement = await createElementOnCanvas(excalidrawElement);
+        // Create element via storage backend
+        const createdElement = await storage.createElement(excalidrawElement);
         
-        if (!canvasElement) {
-          throw new Error('Failed to create element: HTTP server unavailable');
-        }
-        
-        logger.info('Element created via MCP and synced to canvas', { 
+        logger.info('Element created via MCP', { 
           id: excalidrawElement.id, 
           type: excalidrawElement.type,
-          synced: !!canvasElement 
+          mode: storage.mode
         });
         
         return {
           content: [{ 
             type: 'text', 
-            text: `Element created successfully!\n\n${JSON.stringify(canvasElement, null, 2)}\n\n✅ Synced to canvas` 
+            text: `Element created successfully!\n\n${JSON.stringify(createdElement, null, 2)}\n\n✅ Stored (${storage.mode} mode)` 
           }]
         };
       }
@@ -938,22 +832,22 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         // Convert text to label format for Excalidraw
         const excalidrawElement = convertTextToLabel(updatePayload as ServerElement);
         
-        // Update element directly on HTTP server (no local storage)
-        const canvasElement = await updateElementOnCanvas(excalidrawElement);
+        // Update element via storage backend
+        const updatedElement = await storage.updateElement(id, excalidrawElement);
         
-        if (!canvasElement) {
-          throw new Error('Failed to update element: HTTP server unavailable or element not found');
+        if (!updatedElement) {
+          throw new Error('Failed to update element: element not found');
         }
         
-        logger.info('Element updated via MCP and synced to canvas', { 
+        logger.info('Element updated via MCP', { 
           id: excalidrawElement.id, 
-          synced: !!canvasElement 
+          mode: storage.mode
         });
         
         return {
           content: [{ 
             type: 'text', 
-            text: `Element updated successfully!\n\n${JSON.stringify(canvasElement, null, 2)}\n\n✅ Synced to canvas` 
+            text: `Element updated successfully!\n\n${JSON.stringify(updatedElement, null, 2)}\n\n✅ Stored (${storage.mode} mode)` 
           }]
         };
       }
@@ -962,20 +856,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const params = ElementIdSchema.parse(args);
         const { id } = params;
 
-        // Delete element directly on HTTP server (no local storage)
-        const canvasResult = await deleteElementOnCanvas(id);
+        // Delete element via storage backend
+        const deleted = await storage.deleteElement(id);
 
-        if (!canvasResult || !(canvasResult as ApiResponse).success) {
-          throw new Error('Failed to delete element: HTTP server unavailable or element not found');
+        if (!deleted) {
+          throw new Error('Failed to delete element: element not found');
         }
 
-        const result = { id, deleted: true, syncedToCanvas: true };
-        logger.info('Element deleted via MCP and synced to canvas', result);
+        const result = { id, deleted: true, mode: storage.mode };
+        logger.info('Element deleted via MCP', result);
 
         return {
           content: [{
             type: 'text',
-            text: `Element deleted successfully!\n\n${JSON.stringify(result, null, 2)}\n\n✅ Synced to canvas`
+            text: `Element deleted successfully!\n\n${JSON.stringify(result, null, 2)}\n\n✅ Stored (${storage.mode} mode)`
           }]
         };
       }
@@ -984,33 +878,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const params = QuerySchema.parse(args || {});
         const { type, filter } = params;
         
-        try {
-          // Build query parameters
-          const queryParams = new URLSearchParams();
-          if (type) queryParams.set('type', type);
-          if (filter) {
-            Object.entries(filter).forEach(([key, value]) => {
-              queryParams.set(key, String(value));
-            });
-          }
+        const results = await storage.queryElements(type, filter || undefined);
           
-          // Query elements from HTTP server
-          const url = `${EXPRESS_SERVER_URL}/api/elements/search?${queryParams}`;
-          const response = await fetch(url);
-          
-          if (!response.ok) {
-            throw new Error(`HTTP server error: ${response.status} ${response.statusText}`);
-          }
-          
-          const data = await response.json() as ApiResponse;
-          const results = data.elements || [];
-          
-          return {
-            content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
-          };
-        } catch (error) {
-          throw new Error(`Failed to query elements: ${(error as Error).message}`);
-        }
+        return {
+          content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
+        };
       }
       
       case 'get_resource': {
@@ -1029,19 +901,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
             break;
           case 'library':
           case 'elements':
-            try {
-              // Get elements from HTTP server
-              const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
-              if (!response.ok) {
-                throw new Error(`HTTP server error: ${response.status} ${response.statusText}`);
-              }
-              const data = await response.json() as ApiResponse;
-              result = {
-                elements: data.elements || []
-              };
-            } catch (error) {
-              throw new Error(`Failed to get elements: ${(error as Error).message}`);
-            }
+            result = {
+              elements: await storage.getAllElements()
+            };
             break;
           case 'theme':
             result = {
@@ -1065,13 +927,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           const groupId = generateId();
           sceneState.groups.set(groupId, elementIds);
 
-          // Update elements on canvas with proper error handling
+          // Update elements with proper error handling
           // Fetch existing groups and append new groupId to preserve multi-group membership
           const updatePromises = elementIds.map(async (id) => {
-            const element = await getElementFromCanvas(id);
+            const element = await storage.getElement(id);
             const existingGroups = element?.groupIds || [];
             const updatedGroupIds = [...existingGroups, groupId];
-            return await updateElementOnCanvas({ id, groupIds: updatedGroupIds });
+            return await storage.updateElement(id, { groupIds: updatedGroupIds } as Partial<ServerElement>);
           });
 
           const results = await Promise.all(updatePromises);
@@ -1079,7 +941,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
           if (successCount === 0) {
             sceneState.groups.delete(groupId); // Rollback local state
-            throw new Error('Failed to group any elements: HTTP server unavailable');
+            throw new Error('Failed to group any elements: elements not found');
           }
 
           logger.info('Grouping elements', { elementIds, groupId, successCount });
@@ -1105,25 +967,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           const elementIds = sceneState.groups.get(groupId);
           sceneState.groups.delete(groupId);
 
-          // Update elements on canvas, removing only this specific groupId
+          // Update elements, removing only this specific groupId
           const updatePromises = (elementIds ?? []).map(async (id) => {
             // Fetch current element to get existing groupIds
-            const element = await getElementFromCanvas(id);
+            const element = await storage.getElement(id);
             if (!element) {
-              logger.warn(`Element ${id} not found on canvas, skipping ungroup`);
+              logger.warn(`Element ${id} not found, skipping ungroup`);
               return null;
             }
 
             // Remove only the specific groupId, preserve others
             const updatedGroupIds = (element.groupIds || []).filter(gid => gid !== groupId);
-            return await updateElementOnCanvas({ id, groupIds: updatedGroupIds });
+            return await storage.updateElement(id, { groupIds: updatedGroupIds } as Partial<ServerElement>);
           });
 
           const results = await Promise.all(updatePromises);
           const successCount = results.filter(result => result !== null).length;
 
           if (successCount === 0) {
-            throw new Error('Failed to ungroup: no elements were updated (elements may not exist on canvas)');
+            throw new Error('Failed to ungroup: no elements were updated (elements may not exist)');
           }
 
           logger.info('Ungrouping elements', { groupId, elementIds, successCount });
@@ -1145,7 +1007,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         // Fetch all elements
         const elementsToAlign: ServerElement[] = [];
         for (const id of elementIds) {
-          const el = await getElementFromCanvas(id);
+          const el = await storage.getElement(id);
           if (el) elementsToAlign.push(el);
         }
 
@@ -1193,13 +1055,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         // Apply updates
         const updatePromises = elementsToAlign.map(async (el) => {
           const coords = updateFn(el);
-          return await updateElementOnCanvas({ id: el.id, ...coords });
+          return await storage.updateElement(el.id, coords as Partial<ServerElement>);
         });
         const results = await Promise.all(updatePromises);
         const successCount = results.filter(r => r).length;
 
         if (successCount === 0) {
-          throw new Error('Failed to align any elements: HTTP server unavailable');
+          throw new Error('Failed to align any elements');
         }
 
         const result = { aligned: true, elementIds, alignment, successCount };
@@ -1216,7 +1078,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         // Fetch all elements
         const elementsToDist: ServerElement[] = [];
         for (const id of elementIds) {
-          const el = await getElementFromCanvas(id);
+          const el = await storage.getElement(id);
           if (el) elementsToDist.push(el);
         }
 
@@ -1235,7 +1097,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
           let currentX = first.x;
           for (const el of elementsToDist) {
-            await updateElementOnCanvas({ id: el.id, x: currentX });
+            await storage.updateElement(el.id, { x: currentX } as Partial<ServerElement>);
             currentX += (el.width || 0) + gap;
           }
         } else {
@@ -1249,7 +1111,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
           let currentY = first.y;
           for (const el of elementsToDist) {
-            await updateElementOnCanvas({ id: el.id, y: currentY });
+            await storage.updateElement(el.id, { y: currentY } as Partial<ServerElement>);
             currentY += (el.height || 0) + gap;
           }
         }
@@ -1265,16 +1127,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const { elementIds } = params;
         
         try {
-          // Lock elements through HTTP API updates
+          // Lock elements through storage backend
           const updatePromises = elementIds.map(async (id) => {
-            return await updateElementOnCanvas({ id, locked: true });
+            return await storage.updateElement(id, { locked: true } as Partial<ServerElement>);
           });
           
           const results = await Promise.all(updatePromises);
           const successCount = results.filter(result => result).length;
           
           if (successCount === 0) {
-            throw new Error('Failed to lock any elements: HTTP server unavailable');
+            throw new Error('Failed to lock any elements: elements not found');
           }
           
           const result = { locked: true, elementIds, successCount };
@@ -1291,16 +1153,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const { elementIds } = params;
         
         try {
-          // Unlock elements through HTTP API updates
+          // Unlock elements through storage backend
           const updatePromises = elementIds.map(async (id) => {
-            return await updateElementOnCanvas({ id, locked: false });
+            return await storage.updateElement(id, { locked: false } as Partial<ServerElement>);
           });
           
           const results = await Promise.all(updatePromises);
           const successCount = results.filter(result => result).length;
           
           if (successCount === 0) {
-            throw new Error('Failed to unlock any elements: HTTP server unavailable');
+            throw new Error('Failed to unlock any elements: elements not found');
           }
           
           const result = { unlocked: true, elementIds, successCount };
@@ -1313,6 +1175,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       }
       
       case 'create_from_mermaid': {
+        requireCanvasMode('create_from_mermaid');
         const params = z.object({
           mermaidDiagram: z.string(),
           config: z.object({
@@ -1336,7 +1199,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         try {
           // Send the Mermaid diagram to the frontend via the API
           // The frontend will use mermaid-to-excalidraw to convert it
-          const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/from-mermaid`, {
+          const response = await fetch(`${getCanvasServerUrl()}/api/elements/from-mermaid`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1349,7 +1212,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
             throw new Error(`HTTP server error: ${response.status} ${response.statusText}`);
           }
 
-          const result = await response.json() as ApiResponse;
+          const result = await response.json() as CanvasApiResponse;
           
           logger.info('Mermaid diagram sent to frontend for conversion', {
             success: result.success
@@ -1358,7 +1221,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           return {
             content: [{
               type: 'text',
-              text: `Mermaid diagram sent for conversion!\n\n${JSON.stringify(result, null, 2)}\n\n⚠️  Note: The actual conversion happens in the frontend canvas with DOM access. Open the canvas at ${EXPRESS_SERVER_URL} to see the diagram rendered.`
+              text: `Mermaid diagram sent for conversion!\n\n${JSON.stringify(result, null, 2)}\n\n⚠️  Note: The actual conversion happens in the frontend canvas with DOM access. Open the canvas at ${getCanvasServerUrl()} to see the diagram rendered.`
             }]
           };
         } catch (error) {
@@ -1401,28 +1264,24 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           createdElements.push(excalidrawElement);
         }
 
-        const canvasElements = await batchCreateElementsOnCanvas(createdElements);
-
-        if (!canvasElements) {
-          throw new Error('Failed to batch create elements: HTTP server unavailable');
-        }
+        const canvasElements = await storage.batchCreate(createdElements);
 
         const result = {
           success: true,
           elements: canvasElements,
           count: canvasElements.length,
-          syncedToCanvas: true
+          mode: storage.mode
         };
 
-        logger.info('Batch elements created via MCP and synced to canvas', {
+        logger.info('Batch elements created via MCP', {
           count: result.count,
-          synced: result.syncedToCanvas
+          mode: storage.mode
         });
 
         return {
           content: [{
             type: 'text',
-            text: `${result.count} elements created successfully!\n\n${JSON.stringify(result, null, 2)}\n\n${result.syncedToCanvas ? '✅ All elements synced to canvas' : '⚠️  Canvas sync failed (elements still created locally)'}`
+            text: `${result.count} elements created successfully!\n\n${JSON.stringify(result, null, 2)}\n\n✅ Stored (${storage.mode} mode)`
           }]
         };
       }
@@ -1431,7 +1290,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const params = ElementIdSchema.parse(args);
         const { id } = params;
 
-        const element = await getElementFromCanvas(id);
+        const element = await storage.getElement(id);
         if (!element) {
           throw new Error(`Element ${id} not found`);
         }
@@ -1444,20 +1303,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case 'clear_canvas': {
         logger.info('Clearing canvas via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements/clear`, {
-          method: 'DELETE'
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to clear canvas: ${response.status} ${response.statusText}`);
-        }
-
-        const data = await response.json() as ApiResponse;
+        await storage.clear();
 
         return {
           content: [{
             type: 'text',
-            text: `Canvas cleared.\n\n${JSON.stringify(data, null, 2)}`
+            text: `Canvas cleared. (${storage.mode} mode)`
           }]
         };
       }
@@ -1469,23 +1320,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Exporting scene via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch elements: ${response.status} ${response.statusText}`);
-        }
+        const sceneElements = await storage.getAllElements();
 
-        const data = await response.json() as ApiResponse;
-        const sceneElements = data.elements || [];
-
-        // Fetch files for image elements
+        // Fetch files for image elements (canvas mode only)
         let sceneFiles: Record<string, any> = {};
-        try {
-          const filesResponse = await fetch(`${EXPRESS_SERVER_URL}/api/files`);
-          if (filesResponse.ok) {
-            const filesData = await filesResponse.json() as any;
-            sceneFiles = filesData.files || {};
-          }
-        } catch { /* files endpoint may not exist */ }
+        if (storage.mode === 'canvas') {
+          try {
+            const filesResponse = await fetch(`${getCanvasServerUrl()}/api/files`);
+            if (filesResponse.ok) {
+              const filesData = await filesResponse.json() as any;
+              sceneFiles = filesData.files || {};
+            }
+          } catch { /* files endpoint may not exist */ }
+        }
 
         const excalidrawScene: any = {
           type: 'excalidraw',
@@ -1551,7 +1398,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         // If replace mode, clear first
         if (params.mode === 'replace') {
-          await fetch(`${EXPRESS_SERVER_URL}/api/elements/clear`, { method: 'DELETE' });
+          await storage.clear();
         }
 
         // Batch create the imported elements
@@ -1563,16 +1410,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           version: 1
         }));
 
-        const canvasElements = await batchCreateElementsOnCanvas(elementsToCreate);
+        await storage.batchCreate(elementsToCreate);
 
-        // Import files if present (for image elements)
+        // Import files if present (for image elements, canvas mode only)
         let importedFileCount = 0;
         const importFiles = sceneData.files;
-        if (importFiles && typeof importFiles === 'object') {
+        if (importFiles && typeof importFiles === 'object' && storage.mode === 'canvas') {
           const fileList = Object.values(importFiles);
           if (fileList.length > 0) {
             try {
-              await fetch(`${EXPRESS_SERVER_URL}/api/files`, {
+              await fetch(`${getCanvasServerUrl()}/api/files`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(fileList)
@@ -1585,12 +1432,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         return {
           content: [{
             type: 'text',
-            text: `Imported ${elementsToCreate.length} elements${importedFileCount > 0 ? ` and ${importedFileCount} files` : ''} (mode: ${params.mode})\n\n✅ Synced to canvas`
+            text: `Imported ${elementsToCreate.length} elements${importedFileCount > 0 ? ` and ${importedFileCount} files` : ''} (mode: ${params.mode})\n\n✅ Stored (${storage.mode} mode)`
           }]
         };
       }
 
       case 'export_to_image': {
+        requireCanvasMode('export_to_image');
         const params = z.object({
           format: z.enum(['png', 'svg']),
           filePath: z.string().optional(),
@@ -1599,7 +1447,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Exporting to image via MCP', { format: params.format });
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/export/image`, {
+        const response = await fetch(`${getCanvasServerUrl()}/api/export/image`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1609,7 +1457,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         });
 
         if (!response.ok) {
-          const errorData = await response.json() as ApiResponse;
+          const errorData = await response.json() as CanvasApiResponse;
           throw new Error(errorData.error || `Export failed: ${response.status}`);
         }
 
@@ -1654,7 +1502,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         const duplicates: ServerElement[] = [];
         for (const id of params.elementIds) {
-          const original = await getElementFromCanvas(id);
+          const original = await storage.getElement(id);
           if (!original) {
             logger.warn(`Element ${id} not found, skipping duplicate`);
             continue;
@@ -1677,12 +1525,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           throw new Error('No elements could be duplicated (none found)');
         }
 
-        const canvasElements = await batchCreateElementsOnCanvas(duplicates);
+        const canvasElements = await storage.batchCreate(duplicates);
 
         return {
           content: [{
             type: 'text',
-            text: `Duplicated ${duplicates.length} elements (offset: ${offsetX}, ${offsetY})\n\n${JSON.stringify(canvasElements, null, 2)}\n\n✅ Synced to canvas`
+            text: `Duplicated ${duplicates.length} elements (offset: ${offsetX}, ${offsetY})\n\n${JSON.stringify(canvasElements, null, 2)}\n\n✅ Stored (${storage.mode} mode)`
           }]
         };
       }
@@ -1691,17 +1539,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const params = z.object({ name: z.string() }).parse(args);
         logger.info('Saving snapshot via MCP', { name: params.name });
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/snapshots`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: params.name })
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to save snapshot: ${response.status} ${response.statusText}`);
-        }
-
-        const result = await response.json() as any;
+        const result = await storage.saveSnapshot(params.name);
 
         return {
           content: [{
@@ -1715,24 +1553,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         const params = z.object({ name: z.string() }).parse(args);
         logger.info('Restoring snapshot via MCP', { name: params.name });
 
-        // Fetch the snapshot
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/snapshots/${encodeURIComponent(params.name)}`);
-        if (!response.ok) {
-          throw new Error(`Snapshot "${params.name}" not found`);
-        }
-
-        const data = await response.json() as { success: boolean; snapshot: { name: string; elements: ServerElement[]; createdAt: string } };
-
-        // Clear current canvas
-        await fetch(`${EXPRESS_SERVER_URL}/api/elements/clear`, { method: 'DELETE' });
-
-        // Restore elements
-        const canvasElements = await batchCreateElementsOnCanvas(data.snapshot.elements);
+        const elements = await storage.restoreSnapshot(params.name);
 
         return {
           content: [{
             type: 'text',
-            text: `Snapshot "${params.name}" restored (${data.snapshot.elements.length} elements)\n\n✅ Canvas updated`
+            text: `Snapshot "${params.name}" restored (${elements.length} elements)\n\n✅ Storage updated (${storage.mode} mode)`
           }]
         };
       }
@@ -1740,13 +1566,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case 'describe_scene': {
         logger.info('Describing scene via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch elements: ${response.status}`);
-        }
-
-        const data = await response.json() as ApiResponse;
-        const allElements = data.elements || [];
+        const allElements = await storage.getAllElements();
 
         if (allElements.length === 0) {
           return {
@@ -1849,13 +1669,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       }
 
       case 'get_canvas_screenshot': {
+        requireCanvasMode('get_canvas_screenshot');
         const params = z.object({
           background: z.boolean().optional()
         }).parse(args || {});
 
         logger.info('Taking canvas screenshot via MCP');
 
-        const response = await fetch(`${EXPRESS_SERVER_URL}/api/export/image`, {
+        const response = await fetch(`${getCanvasServerUrl()}/api/export/image`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1865,7 +1686,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
         });
 
         if (!response.ok) {
-          const errorData = await response.json() as ApiResponse;
+          const errorData = await response.json() as CanvasApiResponse;
           throw new Error(errorData.error || `Screenshot failed: ${response.status}`);
         }
 
@@ -1895,13 +1716,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       case 'export_to_excalidraw_url': {
         logger.info('Exporting to excalidraw.com URL');
 
-        // 1. Fetch current scene elements
-        const urlExportResponse = await fetch(`${EXPRESS_SERVER_URL}/api/elements`);
-        if (!urlExportResponse.ok) {
-          throw new Error(`Failed to fetch elements: ${urlExportResponse.status}`);
-        }
-        const urlExportData = await urlExportResponse.json() as ApiResponse;
-        const urlExportElements = urlExportData.elements || [];
+        // 1. Fetch current scene elements from storage
+        const urlExportElements = await storage.getAllElements();
 
         if (urlExportElements.length === 0) {
           throw new Error('Canvas is empty — nothing to export');
@@ -2183,6 +1999,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
       }
 
       case 'set_viewport': {
+        requireCanvasMode('set_viewport');
         const viewportParams = z.object({
           scrollToContent: z.boolean().optional(),
           scrollToElementId: z.string().optional(),
@@ -2193,14 +2010,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
 
         logger.info('Setting viewport via MCP', viewportParams);
 
-        const viewportResponse = await fetch(`${EXPRESS_SERVER_URL}/api/viewport`, {
+        const viewportResponse = await fetch(`${getCanvasServerUrl()}/api/viewport`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(viewportParams)
         });
 
         if (!viewportResponse.ok) {
-          const viewportError = await viewportResponse.json() as ApiResponse;
+          const viewportError = await viewportResponse.json() as CanvasApiResponse;
           throw new Error(viewportError.error || `Viewport request failed: ${viewportResponse.status}`);
         }
 
