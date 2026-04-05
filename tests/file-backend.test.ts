@@ -527,6 +527,84 @@ describe('T6: Storage mode property', () => {
 });
 
 // =========================================================================
+// T6b: open_file — dynamic file switching
+// =========================================================================
+describe('T6b: FileStorageBackend — openFile', () => {
+  beforeEach(() => {
+    cleanTestDir();
+    fs.mkdirSync(TEST_DIR, { recursive: true });
+  });
+
+  afterEach(() => {
+    cleanTestDir();
+  });
+
+  it('T6b.1: Switch to a new empty file', async () => {
+    const backend = new FileStorageBackend(TEST_FILE);
+    await backend.createElement(makeElement({ id: 'old-1' }));
+    expect((await backend.getAllElements()).length).toBe(1);
+
+    const newPath = path.join(TEST_DIR, 'second.excalidraw');
+    const result = backend.openFile(newPath);
+    expect(result.elementCount).toBe(0);
+    expect(result.filePath).toBe(path.resolve(newPath));
+    expect((await backend.getAllElements()).length).toBe(0);
+  });
+
+  it('T6b.2: Switch to existing file and load elements', async () => {
+    // Create file A with 2 elements
+    const backendA = new FileStorageBackend(TEST_FILE);
+    await backendA.batchCreate([
+      makeElement({ id: 'a1' }),
+      makeElement({ id: 'a2' }),
+    ]);
+
+    // Create file B with 3 elements
+    const fileB = path.join(TEST_DIR, 'b.excalidraw');
+    const backendB = new FileStorageBackend(fileB);
+    await backendB.batchCreate([
+      makeElement({ id: 'b1' }),
+      makeElement({ id: 'b2' }),
+      makeElement({ id: 'b3' }),
+    ]);
+
+    // Switch backendA to file B
+    const result = backendA.openFile(fileB);
+    expect(result.elementCount).toBe(3);
+    const all = await backendA.getAllElements();
+    expect(all.map(e => e.id).sort()).toEqual(['b1', 'b2', 'b3']);
+  });
+
+  it('T6b.3: Writes go to the new file after switch', async () => {
+    const backend = new FileStorageBackend(TEST_FILE);
+    await backend.createElement(makeElement({ id: 'before' }));
+
+    const newPath = path.join(TEST_DIR, 'switched.excalidraw');
+    backend.openFile(newPath);
+    await backend.createElement(makeElement({ id: 'after' }));
+
+    // New file has the new element
+    const newContent = JSON.parse(fs.readFileSync(newPath, 'utf-8'));
+    expect(newContent.elements).toHaveLength(1);
+    expect(newContent.elements[0].id).toBe('after');
+
+    // Old file still has the old element (untouched)
+    const oldContent = JSON.parse(fs.readFileSync(TEST_FILE, 'utf-8'));
+    expect(oldContent.elements).toHaveLength(1);
+    expect(oldContent.elements[0].id).toBe('before');
+  });
+
+  it('T6b.4: getFilePath returns new path after switch', () => {
+    const backend = new FileStorageBackend(TEST_FILE);
+    expect(backend.getFilePath()).toBe(path.resolve(TEST_FILE));
+
+    const newPath = path.join(TEST_DIR, 'other.excalidraw');
+    backend.openFile(newPath);
+    expect(backend.getFilePath()).toBe(path.resolve(newPath));
+  });
+});
+
+// =========================================================================
 // T7: Factory function
 // =========================================================================
 describe('T7: createStorageBackend factory', () => {

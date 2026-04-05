@@ -28,7 +28,7 @@ import {
   validateElement,
   normalizeFontFamily
 } from './types.js';
-import { createStorageBackend, StorageBackend, CanvasStorageBackend } from './storage/index.js';
+import { createStorageBackend, StorageBackend, CanvasStorageBackend, FileStorageBackend } from './storage/index.js';
 import fetch from 'node-fetch';
 
 // Load environment variables
@@ -717,6 +717,20 @@ const tools: Tool[] = [
           description: 'Vertical scroll offset'
         }
       }
+    }
+  },
+  {
+    name: 'open_file',
+    description: 'Switch the active .excalidraw file (file mode only). Loads existing elements if the file exists, or starts a new empty drawing. All subsequent tool calls will read/write this file.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        filePath: {
+          type: 'string',
+          description: 'Path to the .excalidraw file to open or create'
+        }
+      },
+      required: ['filePath']
     }
   }
 ];
@@ -2027,6 +2041,33 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
           content: [{
             type: 'text',
             text: `Viewport updated successfully.\n\n${JSON.stringify(viewportResult, null, 2)}`
+          }]
+        };
+      }
+
+      case 'open_file': {
+        if (storage.mode !== 'file') {
+          throw new Error(
+            'Tool "open_file" is only available in file mode. Set STORAGE_MODE=file to use it.'
+          );
+        }
+
+        const params = z.object({
+          filePath: z.string()
+        }).parse(args);
+
+        const safePath = sanitizeFilePath(params.filePath);
+        const fileBackend = storage as FileStorageBackend;
+        const result = fileBackend.openFile(safePath);
+
+        logger.info('Switched active file', result);
+
+        return {
+          content: [{
+            type: 'text',
+            text: result.elementCount > 0
+              ? `Opened "${result.filePath}" — loaded ${result.elementCount} existing elements.`
+              : `Opened "${result.filePath}" — new empty drawing (file will be created on first write).`
           }]
         };
       }

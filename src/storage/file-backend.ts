@@ -167,4 +167,12 @@ export class FileStorageBackend implements StorageBackend {
   getFilePath(): string {
     return this.filePath;
   }
+
+  /** Switch to a different file. Loads existing elements if the file exists, otherwise starts empty. */
+  openFile(newPath: string): { filePath: string; elementCount: number } {
+    this.filePath = path.resolve(newPath);
+    this.elements.clear();
+    this.loadFromDisk();
+    return { filePath: this.filePath, elementCount: this.elements.size };
+  }
 }
