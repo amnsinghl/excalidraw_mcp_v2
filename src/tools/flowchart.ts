@@ -7,7 +7,7 @@ import { sugiyamaLayout, type SugiyamaNode, type SugiyamaEdge, type Direction } 
 import { getColor } from '../layout/style.js';
 import { computeGroupFrame } from '../layout/groups.js';
 import { type ServerElement, generateId } from '../types.js';
-import { createShape, createArrow, createTitle } from './helpers.js';
+import { createShape, createArrow, createTitle, linkArrowsToShapes } from './helpers.js';
 
 export interface FlowchartInput {
   nodes: Array<{
@@ -142,5 +142,6 @@ export function createFlowchartElements(input: FlowchartInput): ServerElement[] 
     allElements.unshift(createTitle(title, allElements));
   }
 
+  linkArrowsToShapes(allElements);
   return allElements;
 }

@@ -6,7 +6,7 @@
 import { estimateTextWidth } from '../layout/text.js';
 import { getColor } from '../layout/style.js';
 import { type ServerElement, generateId } from '../types.js';
-import { createShape, createArrow, createTitle } from './helpers.js';
+import { createShape, createArrow, createTitle, linkArrowsToShapes } from './helpers.js';
 
 const ENTITY_GAP = 300;
 const HEADER_HEIGHT = 40;
@@ -127,5 +127,6 @@ export function createERElements(input: ERInput): ServerElement[] {
     allElements.unshift(createTitle(title, allElements));
   }
 
+  linkArrowsToShapes(allElements);
   return allElements;
 }

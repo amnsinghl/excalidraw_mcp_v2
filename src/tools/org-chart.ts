@@ -6,7 +6,7 @@
 import { orgChartLayout, type TreeNode } from '../layout/tree.js';
 import { getColor } from '../layout/style.js';
 import { type ServerElement, generateId } from '../types.js';
-import { createShape, createArrow, createTitle } from './helpers.js';
+import { createShape, createArrow, createTitle, linkArrowsToShapes } from './helpers.js';
 
 export interface OrgChartInput {
   root: TreeNode;
@@ -57,5 +57,6 @@ export function createOrgChartElements(input: OrgChartInput): ServerElement[] {
     allElements.unshift(createTitle(title, allElements));
   }
 
+  linkArrowsToShapes(allElements);
   return allElements;
 }

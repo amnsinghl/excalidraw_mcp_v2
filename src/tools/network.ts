@@ -5,7 +5,7 @@
 
 import { getColor } from '../layout/style.js';
 import { type ServerElement, generateId } from '../types.js';
-import { createShape, createArrow, createTitle } from './helpers.js';
+import { createShape, createArrow, createTitle, linkArrowsToShapes } from './helpers.js';
 
 const NODE_GAP = 250;
 const NODE_WIDTH = 160;
@@ -89,5 +89,6 @@ export function createNetworkElements(input: NetworkInput): ServerElement[] {
     allElements.unshift(createTitle(title, allElements));
   }
 
+  linkArrowsToShapes(allElements);
   return allElements;
 }

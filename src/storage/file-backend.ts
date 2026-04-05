@@ -86,17 +86,22 @@ export class FileStorageBackend implements StorageBackend {
       const base = this.toExcalidrawBase(el);
 
       if (el.type === 'arrow') {
-        // Convert start/end to startBinding/endBinding
+        // Convert start/end to startBinding/endBinding (legacy API path)
+        // Only if no bindings already set by the layout engine
         const startId = (el as any).start?.id || (el as any).startElementId;
         const endId = (el as any).end?.id || (el as any).endElementId;
 
-        if (startId) {
+        if (startId && !base.startBinding) {
           base.startBinding = { elementId: startId, focus: 0, gap: 1 };
           addBound(startId, el.id, 'arrow');
+        } else if (base.startBinding?.elementId) {
+          addBound(base.startBinding.elementId, el.id, 'arrow');
         }
-        if (endId) {
+        if (endId && !base.endBinding) {
           base.endBinding = { elementId: endId, focus: 0, gap: 1 };
           addBound(endId, el.id, 'arrow');
+        } else if (base.endBinding?.elementId) {
+          addBound(base.endBinding.elementId, el.id, 'arrow');
         }
         delete base.start;
         delete base.end;
@@ -243,11 +248,17 @@ export class FileStorageBackend implements StorageBackend {
       }
     }
 
-    // Second pass: attach boundElements arrays
+    // Second pass: merge boundElements arrays (preserve existing + add new)
     for (const el of processedElements) {
-      const bounds = boundElementsMap.get(el.id);
-      if (bounds) {
-        el.boundElements = bounds;
+      const newBounds = boundElementsMap.get(el.id);
+      if (newBounds) {
+        const existing: { id: string; type: string }[] = Array.isArray(el.boundElements) ? el.boundElements : [];
+        const existingIds = new Set(existing.map((b: any) => b.id));
+        const merged = [...existing];
+        for (const b of newBounds) {
+          if (!existingIds.has(b.id)) merged.push(b);
+        }
+        el.boundElements = merged.length > 0 ? merged : null;
       }
       output.push(el);
     }
@@ -279,7 +290,7 @@ export class FileStorageBackend implements StorageBackend {
       version: 1,
       versionNonce: Math.floor(Math.random() * 2000000000),
       isDeleted: false,
-      boundElements: null,
+      boundElements: (el as any).boundElements || null,
       updated: Date.now(),
       link: null,
       locked: (el as any).locked || false,
@@ -296,8 +307,9 @@ export class FileStorageBackend implements StorageBackend {
       base.endArrowhead = (el as any).endArrowhead || (el.type === 'arrow' ? 'arrow' : null);
       base.startArrowhead = (el as any).startArrowhead || null;
       base.lastCommittedPoint = null;
-      base.startBinding = null;
-      base.endBinding = null;
+      // Preserve bindings from layout engine if present
+      base.startBinding = (el as any).startBinding || null;
+      base.endBinding = (el as any).endBinding || null;
       if ((el as any).label) base.label = (el as any).label;
     }
 

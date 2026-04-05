@@ -5,7 +5,7 @@
 
 import { estimateTextWidth } from '../layout/text.js';
 import { type ServerElement, generateId } from '../types.js';
-import { createShape, createTitle } from './helpers.js';
+import { createShape, createTitle, linkArrowsToShapes } from './helpers.js';
 
 const PARTICIPANT_GAP = 200;
 const PARTICIPANT_WIDTH = 150;
@@ -150,5 +150,6 @@ export function createSequenceElements(input: SequenceInput): ServerElement[] {
     allElements.unshift(createTitle(title, allElements));
   }
 
+  linkArrowsToShapes(allElements);
   return allElements;
 }

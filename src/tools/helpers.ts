@@ -6,7 +6,7 @@
 import { generateId, type ServerElement } from '../types.js';
 import { getColor, type ColorPair } from '../layout/style.js';
 import { estimateTextWidth } from '../layout/text.js';
-import { computeArrowLayout, type BoundingBox, type Side } from '../layout/arrows.js';
+import { computeArrowLayout, planDistributedArrows, type BoundingBox, type Side } from '../layout/arrows.js';
 
 export function createShape(
   x: number, y: number, width: number, height: number,
@@ -133,12 +133,14 @@ export function createArrow(
       fixedPoint: layout.startFixed,
       focus: 0,
       gap: 0,
+      mode: 'orbit',
     },
     endBinding: {
       elementId: layout.endElementId,
       fixedPoint: layout.endFixed,
       focus: 0,
       gap: 0,
+      mode: 'orbit',
     },
     roundness: { type: 2 },
     boundElements: [],
@@ -197,4 +199,134 @@ export function createTitle(title: string, allElements: ServerElement[], fontSiz
     fontFamily: 1,
     strokeColor: '#1e1e1e',
   };
+}
+
+/**
+ * Create arrows for multiple connections with distributed fixedPoints.
+ * Prevents arrow bundling when many arrows share the same edge.
+ */
+export function createDistributedArrows(
+  connections: Array<{
+    startEl: BoundingBox;
+    endEl: BoundingBox;
+    label?: string;
+    strokeStyle?: string;
+    startArrowhead?: string | null;
+    endArrowhead?: string | null;
+  }>,
+  options?: {
+    labelBias?: number;
+    layered?: boolean;
+    labelYOverrides?: (number | undefined)[];
+  },
+): ServerElement[] {
+  const { labelBias = 0.3, layered = false, labelYOverrides } = options || {};
+
+  const layouts = planDistributedArrows(connections, { labelBias, layered, labelYOverrides });
+
+  const allElements: ServerElement[] = [];
+  for (let i = 0; i < layouts.length; i++) {
+    const layout = layouts[i]!;
+    const conn = connections[i]!;
+    const id = generateId();
+
+    const arrow: ServerElement = {
+      id,
+      type: 'arrow',
+      x: layout.x,
+      y: layout.y,
+      width: layout.width,
+      height: layout.height,
+      strokeColor: '#1e1e1e',
+      strokeWidth: 2,
+      strokeStyle: conn.strokeStyle || 'solid',
+      roughness: 1,
+      opacity: 100,
+      points: layout.points,
+      startArrowhead: conn.startArrowhead ?? null,
+      endArrowhead: conn.endArrowhead ?? 'arrow',
+      startBinding: {
+        elementId: layout.startElementId,
+        fixedPoint: layout.startFixed,
+        focus: 0,
+        gap: 0,
+        mode: 'orbit',
+      },
+      endBinding: {
+        elementId: layout.endElementId,
+        fixedPoint: layout.endFixed,
+        focus: 0,
+        gap: 0,
+        mode: 'orbit',
+      },
+      roundness: { type: 2 },
+      boundElements: [],
+    };
+
+    allElements.push(arrow);
+
+    if (conn.label && layout.labelX !== undefined) {
+      const textId = id + '_label';
+      const textEl: ServerElement = {
+        id: textId,
+        type: 'text',
+        x: layout.labelX,
+        y: layout.labelY!,
+        width: layout.labelWidth,
+        height: layout.labelHeight,
+        text: conn.label,
+        originalText: conn.label,
+        fontSize: 16,
+        fontFamily: 1,
+        strokeColor: '#1e1e1e',
+        containerId: id,
+      };
+      (arrow.boundElements as any[]).push({ id: textId, type: 'text' });
+      allElements.push(textEl);
+    }
+  }
+
+  return allElements;
+}
+
+/**
+ * Post-process all elements to ensure bidirectional arrow↔shape bindings.
+ * Excalidraw requires shapes to list bound arrows in their boundElements,
+ * and arrows to reference shapes via startBinding/endBinding.
+ * Call this once after all shapes and arrows have been assembled.
+ */
+export function linkArrowsToShapes(elements: ServerElement[]): void {
+  const elementMap = new Map<string, ServerElement>();
+  for (const el of elements) {
+    elementMap.set(el.id, el);
+  }
+
+  for (const el of elements) {
+    if (el.type !== 'arrow') continue;
+
+    const startId = el.startBinding?.elementId;
+    const endId = el.endBinding?.elementId;
+
+    if (startId) {
+      const shape = elementMap.get(startId);
+      if (shape) {
+        if (!shape.boundElements) shape.boundElements = [];
+        const arr = shape.boundElements as any[];
+        if (!arr.some((b: any) => b.id === el.id)) {
+          arr.push({ id: el.id, type: 'arrow' });
+        }
+      }
+    }
+
+    if (endId) {
+      const shape = elementMap.get(endId);
+      if (shape) {
+        if (!shape.boundElements) shape.boundElements = [];
+        const arr = shape.boundElements as any[];
+        if (!arr.some((b: any) => b.id === el.id)) {
+          arr.push({ id: el.id, type: 'arrow' });
+        }
+      }
+    }
+  }
 }
