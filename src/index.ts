@@ -732,6 +732,269 @@ const tools: Tool[] = [
       },
       required: ['filePath']
     }
+  },
+  // ─── Smart Diagram Tools (auto-layout, overlap-free) ───────────────────
+  {
+    name: 'create_flowchart',
+    description: 'Create a flowchart with Sugiyama hierarchical auto-layout. Handles branches, merges, cycles, and disconnected subgraphs. Supports LR/RL/TB/BT directions.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Node label text' },
+              color: { type: 'string', description: 'Color name: blue, green, purple, yellow, red, gray, orange, pink' },
+              shape: { type: 'string', enum: ['rectangle', 'diamond', 'ellipse'], description: 'Node shape (default: rectangle)' },
+              group: { type: 'string', description: 'Group name — nodes with same group get a background frame' },
+              description: { type: 'string', description: 'Secondary text shown below the label' }
+            },
+            required: ['label']
+          },
+          description: 'List of flowchart nodes'
+        },
+        edges: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string', description: 'Source node label or 0-based index' },
+              to: { type: 'string', description: 'Target node label or 0-based index' },
+              label: { type: 'string', description: 'Edge label' },
+              style: { type: 'string', description: 'Stroke style: solid, dashed, dotted' },
+              bidirectional: { type: 'boolean', description: 'If true, arrowheads on both ends' }
+            },
+            required: ['from', 'to']
+          },
+          description: 'List of edges connecting nodes'
+        },
+        direction: { type: 'string', enum: ['LR', 'RL', 'TB', 'BT'], description: 'Layout direction (default: LR)' },
+        title: { type: 'string', description: 'Optional diagram title' }
+      },
+      required: ['nodes', 'edges']
+    }
+  },
+  {
+    name: 'create_architecture_diagram',
+    description: 'Create a layered architecture diagram. Layers are stacked vertically with components arranged horizontally within each layer.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        layers: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Layer name (e.g., "Frontend", "Backend")' },
+              color: { type: 'string', description: 'Layer color name' },
+              components: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string', description: 'Component label' },
+                    color: { type: 'string', description: 'Override component color' }
+                  },
+                  required: ['label']
+                }
+              }
+            },
+            required: ['name', 'components']
+          },
+          description: 'List of layers from top to bottom'
+        },
+        connections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string', description: 'Source component label' },
+              to: { type: 'string', description: 'Target component label' },
+              label: { type: 'string', description: 'Connection label' },
+              style: { type: 'string', description: 'Line style: solid, dashed' }
+            },
+            required: ['from', 'to']
+          }
+        },
+        title: { type: 'string', description: 'Optional diagram title' }
+      },
+      required: ['layers']
+    }
+  },
+  {
+    name: 'create_org_chart',
+    description: 'Create a top-down hierarchical org chart from a tree structure. Auto-calculates subtree widths to prevent overlaps.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: {
+          type: 'object',
+          description: 'Root node with label, optional children (recursive), color, description',
+          properties: {
+            label: { type: 'string' },
+            color: { type: 'string' },
+            description: { type: 'string' },
+            children: { type: 'array', items: { type: 'object' } }
+          },
+          required: ['label']
+        },
+        title: { type: 'string', description: 'Optional chart title' }
+      },
+      required: ['root']
+    }
+  },
+  {
+    name: 'create_mindmap',
+    description: 'Create a horizontal tree-style mind map. Root node in center, branches expand left-to-right with color-coded subtrees.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        root: {
+          type: 'object',
+          description: 'Root node with label and optional children (recursive)',
+          properties: {
+            label: { type: 'string' },
+            children: { type: 'array', items: { type: 'object' } }
+          },
+          required: ['label']
+        },
+        title: { type: 'string', description: 'Optional diagram title' }
+      },
+      required: ['root']
+    }
+  },
+  {
+    name: 'create_sequence_diagram',
+    description: 'Create a UML-style sequence diagram with participants, lifelines, and messages between them.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        participants: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'List of participant names (displayed as boxes at top)'
+        },
+        messages: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string', description: 'Sender participant name' },
+              to: { type: 'string', description: 'Receiver participant name' },
+              label: { type: 'string', description: 'Message text' },
+              style: { type: 'string', description: 'Line style: solid, dashed (for return messages)' }
+            },
+            required: ['from', 'to']
+          },
+          description: 'List of messages in order'
+        },
+        title: { type: 'string', description: 'Optional diagram title' }
+      },
+      required: ['participants', 'messages']
+    }
+  },
+  {
+    name: 'create_er_diagram',
+    description: 'Create an Entity-Relationship diagram with entity boxes, attributes, and relationship arrows with cardinality labels.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        entities: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'Entity name' },
+              attributes: { type: 'array', items: { type: 'string' }, description: 'Attribute names' },
+              color: { type: 'string', description: 'Entity color' }
+            },
+            required: ['name']
+          },
+          description: 'List of entities'
+        },
+        relationships: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string', description: 'Source entity' },
+              to: { type: 'string', description: 'Target entity' },
+              label: { type: 'string', description: 'Relationship label' },
+              fromCardinality: { type: 'string', description: 'Source cardinality (e.g., "1", "N")' },
+              toCardinality: { type: 'string', description: 'Target cardinality (e.g., "1", "N")' }
+            },
+            required: ['from', 'to']
+          }
+        },
+        title: { type: 'string', description: 'Optional diagram title' }
+      },
+      required: ['entities']
+    }
+  },
+  {
+    name: 'create_table',
+    description: 'Create a grid-based table diagram. Auto-sizes columns based on content. Great for comparison tables, feature matrices.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        headers: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Column header labels'
+        },
+        rows: {
+          type: 'array',
+          items: {
+            type: 'array',
+            items: { type: 'string' }
+          },
+          description: 'List of rows, each row is a list of cell values'
+        },
+        title: { type: 'string', description: 'Optional table title' },
+        headerColor: { type: 'string', description: 'Header row color (default: blue)' }
+      },
+      required: ['headers', 'rows']
+    }
+  },
+  {
+    name: 'create_network_diagram',
+    description: 'Create a network topology diagram with typed nodes (server, database, loadbalancer, client, etc.) and connections.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        nodes: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Node label' },
+              type: { type: 'string', enum: ['server', 'database', 'client', 'loadbalancer', 'firewall', 'cloud', 'router'], description: 'Node type (determines shape and color)' },
+              color: { type: 'string', description: 'Override color' }
+            },
+            required: ['label']
+          },
+          description: 'List of network nodes'
+        },
+        links: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              from: { type: 'string', description: 'Source node label' },
+              to: { type: 'string', description: 'Target node label' },
+              label: { type: 'string', description: 'Link label' },
+              style: { type: 'string', description: 'Line style: solid, dashed' },
+              bidirectional: { type: 'boolean', description: 'Double-headed arrow' }
+            },
+            required: ['from', 'to']
+          }
+        },
+        title: { type: 'string', description: 'Optional diagram title' }
+      },
+      required: ['nodes']
+    }
   }
 ];
 
@@ -2068,6 +2331,80 @@ server.setRequestHandler(CallToolRequestSchema, async (request: CallToolRequest)
             text: result.elementCount > 0
               ? `Opened "${result.filePath}" — loaded ${result.elementCount} existing elements.`
               : `Opened "${result.filePath}" — new empty drawing (file will be created on first write).`
+          }]
+        };
+      }
+
+      // ─── Smart Diagram Tools (auto-layout, overlap-free) ───────────────────
+      case 'create_flowchart':
+      case 'create_architecture_diagram':
+      case 'create_org_chart':
+      case 'create_mindmap':
+      case 'create_sequence_diagram':
+      case 'create_er_diagram':
+      case 'create_table':
+      case 'create_network_diagram': {
+        const { createFlowchartElements } = await import('./tools/flowchart.js');
+        const { createArchitectureElements } = await import('./tools/architecture.js');
+        const { createOrgChartElements } = await import('./tools/org-chart.js');
+        const { createMindmapElements } = await import('./tools/mindmap.js');
+        const { createSequenceElements } = await import('./tools/sequence.js');
+        const { createERElements } = await import('./tools/er-diagram.js');
+        const { createTableElements } = await import('./tools/table.js');
+        const { createNetworkElements } = await import('./tools/network.js');
+
+        const toolInput = args || {};
+        let diagramElements: ServerElement[];
+
+        switch (name) {
+          case 'create_flowchart':
+            diagramElements = createFlowchartElements(toolInput as any);
+            break;
+          case 'create_architecture_diagram':
+            diagramElements = createArchitectureElements(toolInput as any);
+            break;
+          case 'create_org_chart':
+            diagramElements = createOrgChartElements(toolInput as any);
+            break;
+          case 'create_mindmap':
+            diagramElements = createMindmapElements(toolInput as any);
+            break;
+          case 'create_sequence_diagram':
+            diagramElements = createSequenceElements(toolInput as any);
+            break;
+          case 'create_er_diagram':
+            diagramElements = createERElements(toolInput as any);
+            break;
+          case 'create_table':
+            diagramElements = createTableElements(toolInput as any);
+            break;
+          case 'create_network_diagram':
+            diagramElements = createNetworkElements(toolInput as any);
+            break;
+          default:
+            throw new Error(`Unknown diagram tool: ${name}`);
+        }
+
+        // Store elements via storage backend
+        const storedDiagramElements: ServerElement[] = [];
+        for (const el of diagramElements) {
+          const elementToStore: ServerElement = {
+            ...el,
+            id: el.id || generateId(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            version: 1,
+          };
+          await storage.createElement(elementToStore);
+          storedDiagramElements.push(elementToStore);
+        }
+
+        logger.info(`Created ${name} with ${storedDiagramElements.length} elements`);
+
+        return {
+          content: [{
+            type: 'text',
+            text: `Created ${name.replace(/_/g, ' ')} with ${storedDiagramElements.length} elements.\n\nElement IDs: ${storedDiagramElements.filter(e => e.type !== 'text').map(e => e.id).join(', ')}`
           }]
         };
       }
