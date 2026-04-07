@@ -141,6 +141,24 @@ export interface ServerElement extends Omit<ExcalidrawElementBase, 'id'> {
   // Arrow element binding: connect arrows to shapes by element ID
   start?: { id: string };
   end?: { id: string };
+  // Arrow arrowhead and binding (used by layout engine and Excalidraw frontend)
+  startArrowhead?: string | null;
+  endArrowhead?: string | null;
+  startBinding?: {
+    elementId: string;
+    focus?: number;
+    gap?: number;
+    fixedPoint?: readonly [number, number] | null;
+    mode?: string;
+  } | null;
+  endBinding?: {
+    elementId: string;
+    focus?: number;
+    gap?: number;
+    fixedPoint?: readonly [number, number] | null;
+    mode?: string;
+  } | null;
+  containerId?: string | null;
 }
 
 // API Response types

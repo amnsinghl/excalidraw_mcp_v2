@@ -672,6 +672,133 @@ app.post('/api/elements/batch', (req: Request, res: Response) => {
   }
 });
 
+// ─── Smart Diagram Tools (auto-layout, overlap-free) ───────────────────────
+
+import { createFlowchartElements } from './tools/flowchart.js';
+import { createArchitectureElements } from './tools/architecture.js';
+import { createOrgChartElements } from './tools/org-chart.js';
+import { createMindmapElements } from './tools/mindmap.js';
+import { createSequenceElements } from './tools/sequence.js';
+import { createERElements } from './tools/er-diagram.js';
+import { createTableElements } from './tools/table.js';
+import { createNetworkElements } from './tools/network.js';
+
+// Helper: insert diagram elements into the canvas and broadcast
+function insertDiagramElements(diagramElements: ServerElement[], res: Response): void {
+  const createdElements: ServerElement[] = [];
+  for (const el of diagramElements) {
+    const element: ServerElement = {
+      ...el,
+      id: el.id || generateId(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+    };
+    elements.set(element.id, element);
+    createdElements.push(element);
+  }
+
+  const message: BatchCreatedMessage = {
+    type: 'elements_batch_created',
+    elements: createdElements,
+  };
+  broadcast(message);
+
+  res.json({
+    success: true,
+    elements: createdElements,
+    count: createdElements.length,
+  });
+}
+
+// POST /api/diagrams/flowchart
+app.post('/api/diagrams/flowchart', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createFlowchartElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating flowchart:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/architecture
+app.post('/api/diagrams/architecture', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createArchitectureElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating architecture diagram:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/org-chart
+app.post('/api/diagrams/org-chart', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createOrgChartElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating org chart:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/mindmap
+app.post('/api/diagrams/mindmap', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createMindmapElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating mindmap:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/sequence
+app.post('/api/diagrams/sequence', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createSequenceElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating sequence diagram:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/er
+app.post('/api/diagrams/er', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createERElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating ER diagram:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/table
+app.post('/api/diagrams/table', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createTableElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating table:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
+// POST /api/diagrams/network
+app.post('/api/diagrams/network', (req: Request, res: Response) => {
+  try {
+    const diagramElements = createNetworkElements(req.body);
+    insertDiagramElements(diagramElements, res);
+  } catch (error) {
+    logger.error('Error creating network diagram:', error);
+    res.status(400).json({ success: false, error: (error as Error).message });
+  }
+});
+
 // Convert Mermaid diagram to Excalidraw elements
 app.post('/api/elements/from-mermaid', (req: Request, res: Response) => {
   try {
